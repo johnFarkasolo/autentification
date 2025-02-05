@@ -13,10 +13,4 @@ export const loginSchema = z.object({
       /^(?=.*[a-z])(?=.*[A-Z])(?=.*\d)(?=.*[@$!%*?&])[A-Za-z\d@$!%*?&]{8,}$/,
       'Password must contain at least one uppercase letter, one lowercase letter, one number, and one special character'
     ),
-  // twoFactorCode: z
-  //   .string()
-  //   .length(6, 'Two-factor code must be 6 digits')
-  //   .regex(/^\d+$/, 'Two-factor code must contain only numbers')
-  //   .optional(),
-  // rememberDevice: z.boolean().default(false),
 });
