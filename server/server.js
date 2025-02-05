@@ -3,32 +3,42 @@ const express = require('express');
 const jwt = require('jsonwebtoken');
 const bcrypt = require('bcrypt');
 const cors = require('cors');
+const cookieParser = require('cookie-parser');
 
 const app = express();
-app.use(cors({origin: process.env.CLIENT_ORIGIN, credentials: true}));
+app.use(cors({ origin: 'http://localhost:5173', credentials: true }));
 app.use(express.json());
+app.use(cookieParser());
 
 const PORT = process.env.PORT || 5000;
 const SECRET = process.env.JWT_SECRET;
-
-if(!SECRET) {
-	throw new Error("Missing JWT_SECRET in .env file");
+if (!SECRET) {
+  throw new Error("Missing JWT_SECRET in .env file");
 }
 
-// In-memory storage (for now)
 const users = new Map();
 
 /**
- * Generate tokens
+ * Generate tokens and set refresh token in a secure cookie
  */
-function generateTokens(email) {
+function generateTokens(res, email) {
   const accessToken = jwt.sign({ email }, SECRET, { expiresIn: '15m' });
   const refreshToken = jwt.sign({ email }, SECRET, { expiresIn: '7d' });
-  return { accessToken, refreshToken };
+
+  users.set(email, { password: users.get(email).password, refreshToken });
+
+  res.cookie('refreshToken', refreshToken, {
+    httpOnly: true, // Prevent XSS attacks
+    secure: false, // Set to true in production (requires HTTPS)
+    sameSite: 'Strict',
+    maxAge: 7 * 24 * 60 * 60 * 1000, // 7 days
+  });
+
+  return { accessToken };
 }
 
 /**
- * Preload a mock user for testing
+ * Preload a mock user
  */
 (async function createMockUser() {
   const mockEmail = "test@example.com";
@@ -40,31 +50,10 @@ function generateTokens(email) {
 })();
 
 /**
- * Register a new user (for testing purposes)
- */
-app.post('/register', async (req, res) => {
-  const { email, password } = req.body;
-
-  if (!email || !password) {
-    return res.status(400).json({ message: 'Email and password are required' });
-  }
-
-  if (users.has(email)) {
-    return res.status(400).json({ message: 'User already exists' });
-  }
-
-  const hashedPassword = await bcrypt.hash(password, 10);
-  users.set(email, { password: hashedPassword, refreshToken: '' });
-
-  return res.json({ message: 'User registered successfully' });
-});
-
-/**
  * Login user and issue JWT
  */
-
 app.post('/login', async (req, res) => {
-	const { email, password } = req.body;
+  const { email, password } = req.body;
 
   if (!users.has(email)) {
     return res.status(401).json({ message: 'Invalid email or password' });
@@ -77,20 +66,18 @@ app.post('/login', async (req, res) => {
     return res.status(401).json({ message: 'Invalid email or password' });
   }
 
-  const { accessToken, refreshToken } = generateTokens(email);
-  users.set(email, { ...user, refreshToken }); // Store refresh token
-
-  res.json({ accessToken, refreshToken });
+  const tokens = generateTokens(res, email);
+  res.json(tokens);
 });
 
 /**
  * Refresh Token Endpoint
  */
-
 app.post('/refresh', (req, res) => {
-  const { refreshToken } = req.body;
+  const refreshToken = req.cookies.refreshToken;
+
   if (!refreshToken) {
-    return res.status(400).json({ message: 'Refresh token required' });
+    return res.status(401).json({ message: 'Refresh token missing' });
   }
 
   try {
@@ -99,34 +86,37 @@ app.post('/refresh', (req, res) => {
       return res.status(401).json({ message: 'Invalid refresh token' });
     }
 
-    const { accessToken, refreshToken: newRefreshToken } = generateTokens(decoded.email);
-    users.set(decoded.email, { ...users.get(decoded.email), refreshToken: newRefreshToken });
-
-    res.json({ accessToken, refreshToken: newRefreshToken });
+    const tokens = generateTokens(res, decoded.email);
+    res.json(tokens);
   } catch (error) {
     res.status(401).json({ message: 'Invalid refresh token' });
   }
 });
 
 /**
- * Logout and remove refresh token
+ * Logout: Clear the refresh token cookie
  */
 app.post('/logout', (req, res) => {
-  const { email } = req.body;
-  if (!users.has(email)) {
-    return res.status(400).json({ message: 'Invalid user' });
-  }
-
-  users.set(email, { ...users.get(email), refreshToken: '' });
+  res.clearCookie('refreshToken');
   res.json({ message: 'Logged out successfully' });
 });
 
 /**
- * Global error handler middleware
+ * Protected Route Example
  */
-app.use((err, req, res, next) => {
-  console.error(err.stack);
-  res.status(500).json({ message: 'Something went wrong' });
+app.get('/protected', (req, res) => {
+  const authHeader = req.headers.authorization;
+  if (!authHeader) {
+    return res.status(401).json({ message: 'No token provided' });
+  }
+
+  const token = authHeader.split(' ')[1];
+  try {
+    const decoded = jwt.verify(token, SECRET);
+    res.json({ message: 'Access granted', email: decoded.email });
+  } catch (error) {
+    res.status(401).json({ message: 'Invalid token' });
+  }
 });
 
 /**

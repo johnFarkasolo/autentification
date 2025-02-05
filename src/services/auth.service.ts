@@ -1,37 +1,63 @@
-// src/services/auth.service.ts
+import axios, { AxiosError } from 'axios';
 
-import { LoginResponse } from '../types/login-response';
-import { post } from './http.service';
+const API_BASE_URL = 'http://localhost:5000';
+
+// Store access token in memory
+let accessToken: string | null = null;
 
 /**
- * Логин:
- * Отправляет { email, password } на сервер.
- * Ожидается, что сервер вернёт { accessToken, refreshToken }.
+ * Save the access token
  */
-export async function login(email: string, password: string): Promise<boolean> {
-    // Если сервер вернёт ошибку (401, 500 и т.д.),
-		// она «пробросится» вызвавшему коду.
-		const response = await post<LoginResponse>(
-			'http://localhost:5000/login',
-			{ email, password },
+function setAccessToken(newAccessToken: string) {
+  accessToken = newAccessToken;
+}
+/**
+ * Login user
+ */
+export async function login(email: string, password: string) {
+	try {
+		const response = await axios.post(
+			`${API_BASE_URL}/login`,
+			{ email,password },
+			{ withCredentials: true } // Required to send cookies
 		);
 
-		if (response.accessToken && response.refreshToken) {
-			localStorage.setItem('auth_token', response.accessToken);
-			localStorage.setItem('refresh_token', response.refreshToken);
-			return true;
-		}
-
-		return false;
+		setAccessToken(response.data.accessToken);
+		return true;
+	} catch (err: unknown) {
+		const error = err as AxiosError<{ message: string }>;
+		console.error('Login failed:', error.response?.data?.message || error.message);
+    return false;
+	}
 }
 
 /**
- * Логаут:
- * Вызывает при необходимости /logout (если на сервере есть такой маршрут),
- * а затем удаляет токены из localStorage.
+ * Logout user (removes tokens)
  */
-export async function logout(): Promise<void> {
-  await post('logout');
-  localStorage.removeItem('auth_token');
-  localStorage.removeItem('refresh_token');
+export async function logout() {
+	await axios.post(`${API_BASE_URL}/logout`, {}, { withCredentials: true });
+	accessToken = null;
+}
+
+/**
+ * Refresh access token using refresh token
+ */
+export async function refreshAccessToken(): Promise<boolean> {
+	try {
+    const response = await axios.post(`${API_BASE_URL}/refresh`, {}, { withCredentials: true });
+    setAccessToken(response.data.accessToken);
+    return true;
+  } catch (err: unknown) {
+		const error = err as AxiosError<{ message: string }>;
+    console.error('Refresh token failed:', error.response?.data?.message || error.message);
+    logout();
+    return false;
+  }
+}
+
+/**
+ * Get authentication headers for API calls
+ */
+export function getAuthHeaders() {
+  return accessToken ? { Authorization: `Bearer ${accessToken}` } : {};
 }
